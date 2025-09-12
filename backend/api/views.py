@@ -1,120 +1,130 @@
 # api/views.py
-from django.shortcuts import render
+
 import os
 import json
+import logging
 import requests
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from .hos_logic import TripSimulator
 import dotenv
-import os.path
 
-# load .env from backend directory explicitly
+# Setup logging
+logger = logging.getLogger(__name__)
+
+# Load environment variables
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
 dotenv.load_dotenv(dotenv_path)
 
-# export MAPQUEST_API_KEY
 MAPQUEST_API_KEY = os.getenv('MAPQUEST_API_KEY')
 
 
-@csrf_exempt  # Use this for development to allow POST requests without a CSRF token
-def get_route_data(request):
-    if request.method == 'POST':
-        try:
-            if not MAPQUEST_API_KEY:
-                return JsonResponse({'error': 'Missing MAPQUEST_API_KEY'}, status=500)
+def get_route_from_mapquest(start, end):
+    """Helper function to call MapQuest API."""
+    url = f"https://www.mapquestapi.com/directions/v2/route?key={MAPQUEST_API_KEY}&from={start}&to={end}&outFormat=json&routeType=fastest"
+    response = requests.get(url)
+    response.raise_for_status()
+    route_info = response.json()
+    if route_info['info']['statuscode'] != 0:
+        raise Exception(
+            f"MapQuest could not find a route from {start} to {end}")
+    return route_info['route']
 
-            # Decode the request body
-            data = json.loads(request.body.decode('utf-8'))
-            start_location = data.get('start')
-            end_location = data.get('end')
 
-            if not start_location or not end_location:
-                return JsonResponse({'error': 'Missing start or end location'}, status=400)
+def format_logs(events):
+    """Helper function to group events by day for the log sheets."""
+    daily_logs = {}
+    for event in events:
+        day = event['day']
+        if day not in daily_logs:
+            daily_logs[day] = {"date": f"Day {day}", "events": []}
 
-            # Use params to ensure correct escaping
-            params = {
-                'key': MAPQUEST_API_KEY,
-                'from': start_location,
-                'to': end_location,
-                'outFormat': 'json',
-                'ambiguities': 'ignore',
-                'routeType': 'fastest',
-                'doReverseGeocode': 'false',
-                'enhancedNarrative': 'false',
-                'avoidTimedConditions': 'false'
-            }
+        # Convert elapsed hours to HH:MM format for the log
+        start_hr = int(event['start_time'] % 24)
+        start_min = int((event['start_time'] * 60) % 60)
 
-            # Make the API call with a timeout
-            response = requests.get("https://www.mapquestapi.com/directions/v2/route", params=params, timeout=10)
-            response.raise_for_status()  # Raise an exception for bad status codes
+        end_time = event['start_time'] + event['duration']
+        end_hr = int(end_time % 24)
+        end_min = int((end_time * 60) % 60)
 
-            route_info = response.json()
+        daily_logs[day]['events'].append({
+            "status": event['status'],
+            "startTime": f"{start_hr:02d}:{start_min:02d}",
+            "endTime": f"{end_hr:02d}:{end_min:02d}",
+            "reason": event.get('reason', '')
+        })
+    return list(daily_logs.values())
 
-            # Check for routing errors from MapQuest
-            status = route_info.get('info', {}).get('statuscode')
-            if status != 0:
-                messages = route_info.get('info', {}).get('messages', [])
-                return JsonResponse({'error': 'MapQuest error', 'statuscode': status, 'messages': messages}, status=400)
 
-            # Extract the necessary data
-            route = route_info.get('route', {})
-            distance = route.get('distance')
+@csrf_exempt
+def plan_trip_view(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST method is allowed'}, status=405)
 
-            # 1) Prefer the top-level shape points if present (flat list: [lat,lng,lat,lng,...])
-            shape = route.get('shape') or {}
-            shape_points = shape.get('shapePoints') if isinstance(shape.get('shapePoints'), list) else []
+    if not MAPQUEST_API_KEY:
+        return JsonResponse({'error': 'MapQuest API key not configured'}, status=500)
 
-            # 2) Fallback: gather shapePoints from maneuvers if top-level not present
-            if not shape_points:
-                for leg in route.get('legs', []):
-                    for maneuver in leg.get('maneuvers', []):
-                        mshape = maneuver.get('shape')
-                        if mshape and isinstance(mshape.get('shapePoints'), list):
-                            shape_points.extend(mshape.get('shapePoints', []))
+    try:
+        data = json.loads(request.body.decode('utf-8'))
 
-            # 3) Fallback: gather lat/lng from maneuver startPoints (MapQuest may include objects)
-            lat_lng_pairs = []
-            if not shape_points:
-                for leg in route.get('legs', []):
-                    for maneuver in leg.get('maneuvers', []):
-                        # try startPoint -> latLng pattern
-                        start_pt = maneuver.get('startPoint') or maneuver.get('startPoint', {})
-                        latlng = None
-                        if isinstance(start_pt, dict):
-                            if 'latLng' in start_pt and isinstance(start_pt['latLng'], dict):
-                                latlng = start_pt['latLng']
-                            elif 'lat' in start_pt and 'lng' in start_pt:
-                                latlng = {'lat': start_pt.get('lat'), 'lng': start_pt.get('lng')}
-                        # also try 'startPoint' directly as lat/lng
-                        if latlng and 'lat' in latlng and 'lng' in latlng:
-                            try:
-                                lat = float(latlng['lat'])
-                                lng = float(latlng['lng'])
-                                lat_lng_pairs.append([lat, lng])
-                            except (TypeError, ValueError):
-                                continue
+        # Validate required fields
+        required_fields = ['currentLocation',
+                           'pickupLocation', 'dropoffLocation']
+        for field in required_fields:
+            if not data.get(field):
+                return JsonResponse({'error': f'Missing required field: {field}'}, status=400)
 
-            # If we have flat shape_points convert to lat/lng pairs
-            if shape_points and not lat_lng_pairs:
-                # Ensure even number of coordinates
-                if len(shape_points) % 2 != 0:
-                    shape_points = shape_points[:-1]
-                lat_lng_pairs = [[float(shape_points[i]), float(shape_points[i+1])]
-                                 for i in range(0, len(shape_points), 2)]
+        current_loc = data['currentLocation']
+        pickup_loc = data['pickupLocation']
+        dropoff_loc = data['dropoffLocation']
+        cycle_hours = float(data.get('cycleHoursUsed', 0))
 
-            if not lat_lng_pairs:
-                return JsonResponse({'error': 'No route coordinates returned by MapQuest.'}, status=400)
+        # 1. Get route data from MapQuest for both segments
+        route_to_pickup = get_route_from_mapquest(current_loc, pickup_loc)
+        route_to_dropoff = get_route_from_mapquest(pickup_loc, dropoff_loc)
 
-            return JsonResponse({
-                'distance': distance,
-                'routePath': lat_lng_pairs
-            })
+        # 2. Extract distances and combine route paths
+        dist_to_pickup = route_to_pickup['distance']
+        total_dist = dist_to_pickup + route_to_dropoff['distance']
 
-        except json.JSONDecodeError:
-            return JsonResponse({'error': 'Invalid JSON in request body'}, status=400)
-        except requests.exceptions.RequestException as re:
-            return JsonResponse({'error': 'MapQuest request failed', 'details': str(re)}, status=502)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
+        # Combine shape points for the full map polyline
+        full_route_shape = route_to_pickup['shape']['shapePoints'] + \
+            route_to_dropoff['shape']['shapePoints']
+        lat_lng_pairs = [[full_route_shape[i], full_route_shape[i+1]]
+                         for i in range(0, len(full_route_shape), 2)]
 
-    return JsonResponse({'error': 'Only POST method is allowed'}, status=405)
+        # 3. Run the HOS simulation
+        simulator = TripSimulator(total_dist, dist_to_pickup, cycle_hours)
+        events = simulator.plan_trip()
+
+        # 4. Format the output
+        stops = [
+            {"location": pickup_loc, "reason": "Pickup"},
+            {"location": dropoff_loc, "reason": "Dropoff"}
+        ]
+        # Add break/fuel stops to the map visualization
+        for event in events:
+            if event['reason'] and "Break" in event['reason'] or "Fueling" in event['reason']:
+                # Note: Getting the exact location of mid-trip stops is complex.
+                # For this assessment, we'll simplify and just add a named stop.
+                stops.append({"location": f"Mid-trip Stop",
+                             "reason": event['reason']})
+
+        daily_logs = format_logs(events)
+
+        return JsonResponse({
+            'routePath': lat_lng_pairs,
+            'stops': stops,
+            'dailyLogs': daily_logs
+        })
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON in request body'}, status=400)
+    except ValueError as ve:
+        return JsonResponse({'error': str(ve)}, status=400)
+    except requests.exceptions.RequestException as re:
+        logger.error(f"MapQuest API error: {str(re)}")
+        return JsonResponse({'error': 'Failed to get route from MapQuest'}, status=502)
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}")
+        return JsonResponse({'error': str(e)}, status=500)
