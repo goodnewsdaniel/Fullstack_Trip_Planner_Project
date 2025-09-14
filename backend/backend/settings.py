@@ -129,10 +129,14 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # Cross-Origin Resource Sharing (CORS) settings
-CORS_ALLOW_ALL_ORIGINS = True  # Only for development!
+
 ALLOWED_HOSTS = ['localhost', '127.0.0.1']
-# To allow React frontend to access the backend
+
+# CORS settings
+CORS_ALLOW_ALL_ORIGINS = True  # Only for development!
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:8080",
+    "http://localhost:3000",  # React default port
+    "http://127.0.0.1:3000",  # Alternative React URL
+    "http://localhost:5000",  # Adding higher port
+    "http://127.0.0.1:5000",  # Adding higher port
 ]
