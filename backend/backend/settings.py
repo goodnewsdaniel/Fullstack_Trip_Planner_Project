@@ -42,6 +42,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # Add this
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -127,6 +128,10 @@ STATIC_URL = '/static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
-# Add these settings at the bottom of the file
+# Cross-Origin Resource Sharing (CORS) settings
 CORS_ALLOW_ALL_ORIGINS = True  # Only for development!
 ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+# To allow React frontend to access the backend
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+]

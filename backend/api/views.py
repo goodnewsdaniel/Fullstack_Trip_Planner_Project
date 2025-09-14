@@ -56,6 +56,29 @@ def format_logs(events):
     return list(daily_logs.values())
 
 
+def extract_shape_points(route):
+    """Helper function to extract shape points from route data."""
+    shape_points = []
+
+    # Try to get shape points from route shape
+    if 'shape' in route and isinstance(route['shape'], dict):
+        points = route['shape'].get('shapePoints', [])
+        if isinstance(points, list):
+            shape_points.extend(points)
+            return shape_points
+
+    # Fallback: gather from maneuvers
+    for leg in route.get('legs', []):
+        for maneuver in leg.get('maneuvers', []):
+            if 'startPoint' in maneuver:
+                lat = maneuver['startPoint'].get('lat')
+                lng = maneuver['startPoint'].get('lng')
+                if lat is not None and lng is not None:
+                    shape_points.extend([lat, lng])
+
+    return shape_points
+
+
 @csrf_exempt
 def plan_trip_view(request):
     if request.method != 'POST':
@@ -87,9 +110,18 @@ def plan_trip_view(request):
         dist_to_pickup = route_to_pickup['distance']
         total_dist = dist_to_pickup + route_to_dropoff['distance']
 
-        # Combine shape points for the full map polyline
-        full_route_shape = route_to_pickup['shape']['shapePoints'] + \
-            route_to_dropoff['shape']['shapePoints']
+        # Get shape points for both segments
+        pickup_shape = extract_shape_points(route_to_pickup)
+        dropoff_shape = extract_shape_points(route_to_dropoff)
+
+        # Combine shape points
+        full_route_shape = pickup_shape + dropoff_shape
+
+        # Ensure we have pairs of coordinates
+        if len(full_route_shape) < 4:
+            return JsonResponse({'error': 'Insufficient route data from MapQuest'}, status=400)
+
+        # Convert to lat/lng pairs
         lat_lng_pairs = [[full_route_shape[i], full_route_shape[i+1]]
                          for i in range(0, len(full_route_shape), 2)]
 
