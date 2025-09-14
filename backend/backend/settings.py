@@ -134,4 +134,5 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 # To allow React frontend to access the backend
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "http://localhost:8080",
 ]
