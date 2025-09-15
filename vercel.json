@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "builds": [
+    {
+      "src": "trip_planner/backend/backend/wsgi.py",
+      "use": "@vercel/python",
+      "config": { 
+        "maxLambdaSize": "15mb", 
+        "runtime": "python3.9"
+      }
+    },
+    {
+      "src": "trip_planner/frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "build",
+        "buildCommand": "npm run build"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/static/(.*)",
+      "dest": "trip_planner/frontend/build/static/$1"
+    },
+    {
+      "src": "/api/(.*)",
+      "dest": "trip_planner/backend/backend/wsgi.py"
+    },
+    {
+      "src": "/admin/(.*)",
+      "dest": "trip_planner/backend/backend/wsgi.py"
+    },
+    {
+      "src": "/(.*)\\.(?:json|ico|png|jpg|jpeg|svg|gif)$",
+      "dest": "trip_planner/frontend/build/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "trip_planner/frontend/build/index.html"
+    }
+  ],
+  "env": {
+    "PYTHON_VERSION": "3.9",
+    "NODE_VERSION": "16.x"
+  }
+}
