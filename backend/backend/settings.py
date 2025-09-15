@@ -130,8 +130,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Cross-Origin Resource Sharing (CORS) settings
 
-# ALLOWED_HOSTS = ['localhost', '127.0.0.1']
-ALLOWED_HOSTS = ['.vercel.app', '127.0.0.1']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+# ALLOWED_HOSTS = ['.vercel.app', '127.0.0.1']
 
 # CORS settings
 CORS_ALLOW_ALL_ORIGINS = True  # Only for development!
